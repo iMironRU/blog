@@ -55,7 +55,7 @@ export function getPosts(drafts = false): Post[] {
   return posts.sort((a, b) => b.date.getTime() - a.date.getTime());
 }
 
-export const PLATFORM_NAMES: Record<string, string> = { telegram: "Telegram", vk: "VK", max: "MAX", dzen: "Дзен" };
+export const PLATFORM_NAMES: Record<string, string> = { telegram: "Telegram", telegraph: "Telegraph", teletype: "Teletype", vk: "VK", max: "MAX", dzen: "Дзен" };
 
 /** Ссылки на копии поста для блока «Читайте где удобно». */
 export function copyLinks(post: Post, state: PublishedState) {
