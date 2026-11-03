@@ -41,6 +41,8 @@ jobs:
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
+          TGPH_TOKEN: ${{ secrets.TGPH_TOKEN }}
+          TELETYPE_TOKEN: ${{ secrets.TELETYPE_TOKEN }}
 
       # 3. состояние в репозиторий; [skip ci] чтобы не зациклить
       - run: |
