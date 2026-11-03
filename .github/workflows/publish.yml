@@ -11,7 +11,6 @@ permissions:
   contents: write
   pages: write
   id-token: write
-  actions: write
 
 env:
   SITE_URL: ${{ vars.SITE_URL }}
@@ -31,9 +30,11 @@ jobs:
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
-        with: { path: out }
+        with: { path: out, name: github-pages-v1 }
       - id: deploy
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-v1
 
       # 2. анонсы (ждёт 200 от страницы), затем правка блоком «Читайте где удобно»
       - run: python3 scripts/crosspost.py
@@ -50,15 +51,8 @@ jobs:
 
       # 4. повторная сборка со ссылками и RSS (пост попадает в rss.xml только теперь)
       - run: npm run build
-      - name: Delete old artifact for re-upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ids=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-            --jq '.artifacts[] | select(.name=="github-pages") | .id')
-          for id in $ids; do
-            gh api "/repos/${{ github.repository }}/actions/artifacts/$id/delete" -X DELETE || true
-          done
       - uses: actions/upload-pages-artifact@v3
-        with: { path: out }
+        with: { path: out, name: github-pages-v2 }
       - uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-v2
