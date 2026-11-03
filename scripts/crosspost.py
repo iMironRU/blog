@@ -5,14 +5,17 @@
 Фаза 2: когда пост ушёл на все свои площадки, пересобирает каждое сообщение целиком
         (анонс + блок «Читайте где удобно») и заменяет им исходное. Повторный запуск ничего не задваивает.
 
-Env: SITE_URL, TG_TOKEN, TG_CHAT (@username или -100...), DRY_RUN=1 (ничего не отправлять и не писать).
+Env: SITE_URL, DRY_RUN=1 (ничего не отправлять и не писать).
+Площадки читают свои токены/чаты из env: TG_TOKEN, TG_CHAT, TGPH_TOKEN, TELETYPE_TOKEN.
 Только стандартная библиотека.
 """
 import hashlib
 import html
 import json
 import os
+import random
 import re
+import string
 import sys
 import time
 import urllib.error
@@ -26,8 +29,9 @@ STATE = ROOT / ".published.json"
 SITE_URL = os.environ.get("SITE_URL", "https://blog.example.ru").rstrip("/")
 DRY = os.environ.get("DRY_RUN") == "1"
 
-NAMES = {"site": "Сайт", "telegram": "Telegram", "vk": "VK", "max": "MAX", "dzen": "Дзен"}
-ORDER = ["site", "telegram", "vk", "max", "dzen"]
+NAMES = {"site": "Сайт", "telegram": "Telegram", "telegraph": "Telegraph",
+         "teletype": "Teletype", "vk": "VK", "max": "MAX", "dzen": "Дзен"}
+ORDER = ["site", "telegram", "telegraph", "teletype", "vk", "max", "dzen"]
 
 
 # ---------- посты ----------
@@ -53,6 +57,7 @@ def parse_post(path: Path):
     meta["slug"] = slug
     meta["dir"] = path.parent
     meta["site_url"] = f"{SITE_URL}/{slug}/"
+    meta["body"] = m.group(2).strip()  # сырой markdown-текст поста
     return meta
 
 
@@ -86,19 +91,209 @@ def build_block(post, st, own):
     return parts
 
 
+def build_block_text(parts):
+    """Текст «Читайте где удобно: ссылка1 · ссылка2»."""
+    if not parts:
+        return ""
+    links = " · ".join(f'{NAMES[k]}: {u}' for k, u in parts)
+    return f"📖 Читайте где удобно:\n{links}"
+
+
 def telegram_text(post, parts):
     t = f"<b>{html.escape(post['title'])}</b>"
     if post.get("summary"):
         t += f"\n\n{html.escape(post['summary'])}"
     if not parts:
         return t
-    # без блока ссылок хотя бы ссылка на сайт: она и есть «parts» с site, так что блок всегда содержит её
     links = " · ".join(f'<a href="{html.escape(u, quote=True)}">{NAMES[k]}</a>' for k, u in parts)
     return t + f"\n\n📖 Читайте где удобно:\n{links}"
 
 
 def block_hash(parts):
     return hashlib.sha1(json.dumps(parts).encode()).hexdigest()[:12]
+
+
+# ---------- общие утилиты markdown ----------
+
+def _rand_anchor():
+    """Случайные 4 латинские буквы для Teletype XML."""
+    return "".join(random.choices(string.ascii_letters, k=4))
+
+
+def _inline_md(text):
+    """Простая конвертация inline-разметки в HTML (для Teletype XML)."""
+    # `code`
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    # **bold**
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+    # *italic*
+    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
+    # [text](url)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+    return text
+
+
+def _inline_telegraph(text):
+    """Конвертация inline-разметки в массив Telegraph Node."""
+    children = []
+    # Простой подход: разбиваем на сегменты обычного текста и форматирования
+    parts = re.split(r"(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))", text)
+    for p in parts:
+        if not p:
+            continue
+        if p.startswith("`") and p.endswith("`"):
+            children.append({"tag": "code", "children": [p[1:-1]]})
+        elif p.startswith("**") and p.endswith("**"):
+            children.append({"tag": "strong", "children": [p[2:-2]]})
+        elif p.startswith("*") and p.endswith("*") and not p.startswith("**"):
+            children.append({"tag": "em", "children": [p[1:-1]]})
+        elif p.startswith("[") and "](" in p:
+            m = re.match(r"\[([^\]]+)\]\(([^)]+)\)", p)
+            if m:
+                children.append({"tag": "a", "attrs": {"href": m.group(2)}, "children": [m.group(1)]})
+        else:
+            children.append(p)
+    return children
+
+
+# ---------- Markdown → Telegraph Nodes ----------
+
+def _md_to_telegraph(text):
+    """Конвертирует markdown в массив Telegraph Node."""
+    nodes = []
+    in_list = False
+    list_items = []
+
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            continue
+
+        if stripped.startswith("## "):
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            nodes.append({"tag": "h2", "children": [stripped[3:]]})
+        elif stripped.startswith("# "):
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            nodes.append({"tag": "h3", "children": [stripped[2:]]})
+        elif stripped.startswith("> "):
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            nodes.append({"tag": "blockquote", "children": [{"tag": "p", "children": _inline_telegraph(stripped[2:])}]})
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            in_list = True
+            list_items.append(_inline_telegraph(stripped[2:]))
+        elif stripped.startswith("```"):
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            code_lines = []
+            lang = stripped[3:].strip()
+            in_list = False
+            continue
+        elif stripped.startswith("---") and len(stripped) >= 3:
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            nodes.append({"tag": "hr"})
+        elif stripped.startswith("!["):
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            m = re.match(r"!\[([^\]]*)\]\(([^)]+)\)", stripped)
+            if m:
+                nodes.append({"tag": "img", "attrs": {"src": m.group(2)}})
+        else:
+            if in_list:
+                nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+                list_items = []
+                in_list = False
+            # paragraph
+            c = _inline_telegraph(stripped)
+            # Если есть инлайн-код с целым блоком, обернём как code_block
+            nodes.append({"tag": "p", "children": c})
+
+    if in_list:
+        nodes.append({"tag": "ul", "children": [{"tag": "li", "children": [t]} for t in list_items]})
+
+    return nodes
+
+
+# ---------- Markdown → Teletype XML ----------
+
+def _md_to_teletype_xml(text):
+    """Конвертирует markdown в Teletype XML document."""
+    parts = ['<document>']
+    code_block = False
+    code_lang = ""
+    code_lines = []
+
+    def flush_code():
+        nonlocal code_block, code_lang, code_lines
+        if code_lines:
+            lang_attr = f' lang="{html.escape(code_lang, quote=True)}"' if code_lang else ""
+            code = html.escape("\n".join(code_lines))
+            parts.append(f'<code_block anchor="{_rand_anchor()}"{lang_attr}>{code}</code_block>')
+            code_lines = []
+            code_block = False
+            code_lang = ""
+
+    for line in text.split("\n"):
+        stripped = line.rstrip()
+
+        if code_block:
+            if stripped == "```":
+                flush_code()
+            else:
+                code_lines.append(stripped)
+            continue
+
+        if stripped.startswith("```"):
+            flush_code()
+            code_block = True
+            code_lang = stripped[3:].strip()
+            continue
+
+        if not stripped:
+            continue
+
+        if stripped.startswith("## "):
+            parts.append(f'<h2 anchor="{_rand_anchor()}">{html.escape(stripped[3:])}</h2>')
+        elif stripped.startswith("# "):
+            parts.append(f'<h2 anchor="{_rand_anchor()}">{html.escape(stripped[2:])}</h2>')
+        elif stripped.startswith("> "):
+            inner = _inline_md(stripped[2:])
+            parts.append(f'<blockquote anchor="{_rand_anchor()}"><p anchor="{_rand_anchor()}">{inner}</p></blockquote>')
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            inner = _inline_md(stripped[2:])
+            parts.append(f'<ul anchor="{_rand_anchor()}"><li anchor="{_rand_anchor()}">{inner}</li></ul>')
+        elif stripped.startswith("---") and len(stripped) >= 3:
+            parts.append(f'<hr anchor="{_rand_anchor()}"/>')
+        elif stripped.startswith("!["):
+            m = re.match(r"!\[([^\]]*)\]\(([^)]+)\)", stripped)
+            if m:
+                parts.append(f'<image anchor="{_rand_anchor()}" src="{html.escape(m.group(2), quote=True)}"/>')
+        else:
+            inner = _inline_md(stripped)
+            parts.append(f'<p anchor="{_rand_anchor()}">{inner}</p>')
+
+    flush_code()
+    parts.append("</document>")
+    return "\n".join(parts)
 
 
 # ---------- Telegram ----------
@@ -165,10 +360,139 @@ class Telegram:
                                            "text": text, "parse_mode": "HTML"})
 
 
+# ---------- Telegraph ----------
+
+APPHDR = {"Content-Type": "application/json"}
+
+
+class Telegraph:
+    key = "telegraph"
+    API = "https://api.telegra.ph"
+
+    def __init__(self):
+        self.token = os.environ["TGPH_TOKEN"]
+
+    def _call(self, method, fields):
+        url = f"{self.API}/{method}?access_token={self.token}"
+        req = urllib.request.Request(url, json.dumps(fields).encode(), APPHDR)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.load(r)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Telegraph {method}: {e.read().decode()}") from e
+        if not res.get("ok"):
+            raise RuntimeError(f"Telegraph {method}: {res}")
+        return res["result"]
+
+    def publish(self, post, parts):
+        body = post.get("body", "")
+        content = _md_to_telegraph(body)
+        # Добавляем блок ссылок
+        block_text = build_block_text(parts)
+        if block_text:
+            content.append({"tag": "p", "children": [block_text]})
+        result = self._call("createPage", {
+            "title": post["title"],
+            "content": content,
+            "author_name": "iMiron",
+            "author_url": SITE_URL,
+            "return_content": False,
+        })
+        url = f"https://telegra.ph/{result['path']}"
+        return {"id": result["path"], "url": url}
+
+    def edit(self, post, entry, parts):
+        body = post.get("body", "")
+        content = _md_to_telegraph(body)
+        block_text = build_block_text(parts)
+        if block_text:
+            content.append({"tag": "p", "children": [block_text]})
+        result = self._call("editPage", {
+            "path": entry["id"],
+            "title": post["title"],
+            "content": content,
+            "author_name": "iMiron",
+            "author_url": SITE_URL,
+            "return_content": False,
+        })
+        url = f"https://telegra.ph/{result['path']}"
+        return {"id": result["path"], "url": url}
+
+
+# ---------- Teletype ----------
+
+class Teletype:
+    key = "teletype"
+    API = "https://teletype.in/api"
+
+    def __init__(self):
+        self.token = os.environ["TELETYPE_TOKEN"]
+        self.blog_id = int(os.environ.get("TELETYPE_BLOG_ID", "1370830"))
+
+    def _hdr(self):
+        return {
+            "Authorization": self.token,
+            "X-Client-Version": "Teletype.Web/4.41.26",
+            "Content-Type": "application/json",
+        }
+
+    def _call(self, method, url, body=None):
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(f"{self.API}/{url}", data, self._hdr(), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Teletype {method} {url}: {e.read().decode()}") from e
+
+    def publish(self, post, parts):
+        body = post.get("body", "")
+        xml = _md_to_teletype_xml(body)
+        block_text = build_block_text(parts)
+        if block_text:
+            xml = xml.rstrip("\n") + f'\n<p anchor="{_rand_anchor()}">{html.escape(block_text)}</p>\n</document>'
+
+        payload = {
+            "author_id": self.blog_id,
+            "creator_id": self.blog_id,
+            "title": post["title"],
+            "text": xml,
+            "cut_text": post.get("summary", ""),
+            "visibility": "all",
+        }
+        result = self._call("POST", "articles", payload)
+        article_id = result.get("id")
+        uri = result.get("uri", "")
+        url = f"{SITE_URL}/{uri}/" if uri else ""
+        return {"id": article_id or uri, "uri": uri, "url": url}
+
+    def edit(self, post, entry, parts):
+        body = post.get("body", "")
+        xml = _md_to_teletype_xml(body)
+        block_text = build_block_text(parts)
+        if block_text:
+            xml = xml.rstrip("\n") + f'\n<p anchor="{_rand_anchor()}">{html.escape(block_text)}</p>\n</document>'
+
+        article_id = entry["id"]
+        payload = {
+            "title": post["title"],
+            "text": xml,
+            "cut_text": post.get("summary", ""),
+        }
+        result = self._call("PUT", f"articles/{article_id}", payload)
+        return {"id": result.get("id", article_id), "url": entry.get("url", "")}
+
+
+# ---------- фабрика площадок ----------
+
 def platforms():
     out = {}
     if os.environ.get("TG_TOKEN") and os.environ.get("TG_CHAT"):
         out["telegram"] = Telegram()
+    if os.environ.get("TGPH_TOKEN"):
+        out["telegraph"] = Telegraph()
+    if os.environ.get("TELETYPE_TOKEN"):
+        out["teletype"] = Teletype()
     return out
 
 
@@ -209,7 +533,7 @@ def main():
             try:
                 parts = build_block(p, st, own=k)[:1]  # в анонсе пока только ссылка на сайт
                 if DRY:
-                    print(f"[dry] {p['slug']} -> {k}:\n{telegram_text(p, parts)}\n")
+                    print(f"[dry] {p['slug']} -> {k}: площада {NAMES.get(k, k)}")
                     continue
                 st[k] = plats[k].publish(p, parts)
                 st[k]["sent"] = block_hash(parts)
@@ -237,7 +561,7 @@ def main():
                 continue
             try:
                 if DRY:
-                    print(f"[dry] edit {p['slug']} {k}:\n{telegram_text(p, parts)}\n")
+                    print(f"[dry] edit {p['slug']} {k}: блок ссылок")
                     continue
                 plats[k].edit(p, st[k], parts)
                 st[k]["sent"] = h
