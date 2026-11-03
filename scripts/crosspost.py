@@ -19,6 +19,7 @@ import string
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -483,6 +484,63 @@ class Teletype:
         return {"id": result.get("id", article_id), "url": entry.get("url", "")}
 
 
+# ---------- VK ----------
+
+class VK:
+    key = "vk"
+    API = "https://api.vk.com/method"
+
+    def __init__(self):
+        self.token = os.environ["VK_TOKEN"]
+        self.owner_id = int(os.environ.get("VK_OWNER_ID", "0"))
+
+    def _call(self, method, params):
+        params["access_token"] = self.token
+        params["v"] = "5.199"
+        data = urllib.parse.urlencode(params).encode()
+        req = urllib.request.Request(
+            f"{self.API}/{method}", data,
+            {"Content-Type": "application/x-www-form-urlencoded"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.load(r)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"VK {method}: {e.read().decode()}") from e
+        if "error" in res:
+            raise RuntimeError(f"VK {method}: {res['error']['error_msg']} (code {res['error']['error_code']})")
+        return res["response"]
+
+    def publish(self, post, parts):
+        message = f"🔗 {post['title']}\n\n{post.get('summary', '')}"
+        links = build_block_text(parts)
+        if links:
+            message += f"\n\n{links}"
+        # Ссылка на сайт в attachments
+        result = self._call("wall.post", {
+            "owner_id": self.owner_id,
+            "message": message.strip(),
+            "from_group": 1,
+            "attachments": post["site_url"],
+        })
+        post_id = result.get("post_id")
+        url = f"https://vk.com/wall{self.owner_id}_{post_id}"
+        return {"id": post_id, "url": url}
+
+    def edit(self, post, entry, parts):
+        message = f"🔗 {post['title']}\n\n{post.get('summary', '')}"
+        links = build_block_text(parts)
+        if links:
+            message += f"\n\n{links}"
+        self._call("wall.edit", {
+            "owner_id": self.owner_id,
+            "post_id": entry["id"],
+            "message": message.strip(),
+            "attachments": post["site_url"],
+        })
+        return entry  # id и url не меняются
+
+
 # ---------- фабрика площадок ----------
 
 def platforms():
@@ -493,6 +551,8 @@ def platforms():
         out["telegraph"] = Telegraph()
     if os.environ.get("TELETYPE_TOKEN"):
         out["teletype"] = Teletype()
+    if os.environ.get("VK_TOKEN") and os.environ.get("VK_OWNER_ID"):
+        out["vk"] = VK()
     return out
 
 
