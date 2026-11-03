@@ -31,6 +31,6 @@ collections:
         name: publish_to
         widget: select
         multiple: true
-        options: [{ label: Telegram, value: telegram }, { label: VK, value: vk }, { label: MAX, value: max }]
+        options: [{ label: Telegram, value: telegram }, { label: Telegraph, value: telegraph }, { label: Teletype, value: teletype }, { label: VK, value: vk }, { label: MAX, value: max }]
         default: [telegram]
       - { label: Текст, name: body, widget: markdown }
