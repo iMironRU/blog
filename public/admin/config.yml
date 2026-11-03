@@ -1,0 +1,36 @@
+# Sveltia CMS (совместим с Decap). Вход: GitHub, кнопка «Sign in with token» (личный токен, права Contents: read/write).
+backend:
+  name: github
+  repo: iMironRU/blog        # проверить имя репозитория
+  branch: main
+
+media_folder: ""             # картинки лежат рядом с постом: posts/<дата-slug>/cover.jpg
+public_folder: ""
+locale: ru
+
+collections:
+  - name: posts
+    label: Посты
+    label_singular: Пост
+    folder: posts
+    path: "{{slug}}/index"
+    slug: "{{year}}-{{month}}-{{day}}-{{fields.slug}}"
+    create: true
+    extension: md
+    format: frontmatter
+    summary: "{{title}} ({{date}})"
+    sortable_fields: [date, title]
+    fields:
+      - { label: Заголовок, name: title, widget: string }
+      - { label: "Адрес (латиницей)", name: slug, widget: string, pattern: ["^[a-z0-9-]+$", "Только строчные латинские буквы, цифры и дефис"], hint: "Часть ссылки: /адрес/" }
+      - { label: Дата, name: date, widget: datetime, date_format: "YYYY-MM-DD", time_format: false, format: "YYYY-MM-DD" }
+      - { label: Черновик, name: draft, widget: boolean, default: true, hint: "Пока включено, пост не публикуется и не уходит в соцсети" }
+      - { label: "Анонс (summary)", name: summary, widget: text, hint: "Коротко: в Telegram с картинкой подпись вместе с блоком ссылок ≤ 1024 символов" }
+      - { label: Обложка, name: cover, widget: image, required: false }
+      - label: Площадки
+        name: publish_to
+        widget: select
+        multiple: true
+        options: [{ label: Telegram, value: telegram }, { label: VK, value: vk }, { label: MAX, value: max }]
+        default: [telegram]
+      - { label: Текст, name: body, widget: markdown }

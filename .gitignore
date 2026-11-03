@@ -1,0 +1,9 @@
+public/assets/
+node_modules/
+out/
+.next/
+.env
+next-env.d.ts
+public/assets/
+public/admin/sveltia-cms.js
+*.tsbuildinfo

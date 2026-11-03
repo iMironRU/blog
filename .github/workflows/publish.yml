@@ -1,0 +1,54 @@
+name: publish
+on:
+  push:
+    branches: [main]
+    paths: ['posts/**', 'app/**', 'lib/**', 'public/**', 'package.json']
+  workflow_dispatch:
+
+concurrency: publish
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  SITE_URL: ${{ vars.SITE_URL }}
+  NEXT_PUBLIC_BASE_PATH: ${{ vars.BASE_PATH }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      # 1. сборка и деплой: страницы постов появляются на сайте
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: out }
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      # 2. анонсы (ждёт 200 от страницы), затем правка блоком «Читайте где удобно»
+      - run: python3 scripts/crosspost.py
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+
+      # 3. состояние в репозиторий; [skip ci] чтобы не зациклить
+      - run: |
+          git config user.name "blog-bot"
+          git config user.email "blog-bot@users.noreply.github.com"
+          git add .published.json
+          git diff --cached --quiet || { git commit -m "chore: published state [skip ci]" && git push; }
+
+      # 4. повторная сборка со ссылками и RSS (пост попадает в rss.xml только теперь)
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: out }
+      - uses: actions/deploy-pages@v4
