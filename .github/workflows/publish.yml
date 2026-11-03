@@ -2,7 +2,7 @@ name: publish
 on:
   push:
     branches: [main]
-    paths: ['posts/**', 'app/**', 'lib/**', 'public/**', 'package.json']
+    paths: ['.github/workflows/publish.yml', 'posts/**', 'app/**', 'lib/**', 'public/**', 'package.json']
   workflow_dispatch:
 
 concurrency: publish
