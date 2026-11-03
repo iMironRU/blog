@@ -49,6 +49,12 @@ jobs:
 
       # 4. повторная сборка со ссылками и RSS (пост попадает в rss.xml только теперь)
       - run: npm run build
+      - name: Delete old artifact for re-upload
+        run: |
+          for id in $(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name=="github-pages") | .id'); do
+            gh api "/repos/${{ github.repository }}/actions/artifacts/$id/delete" -X DELETE
+          done
       - uses: actions/upload-pages-artifact@v3
         with: { path: out }
       - uses: actions/deploy-pages@v4
